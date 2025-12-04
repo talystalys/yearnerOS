@@ -1,0 +1,48 @@
+sources/
+*.img
+*.img.gz
+*.img.xz
+*.qcow2
+boot_log.txt
+test_log.txt
+*.pyc
+__pycache__/
+analyze_song.py
+detect_vocals.py
+
+# Compiled binaries (built from source during build)
+rootfs/bin/
+rootfs/sbin/
+rootfs/lib/
+rootfs/lib64/
+rootfs/usr/bin/bash
+rootfs/usr/bin/busybox
+rootfs/usr/bin/mpg123
+rootfs/usr/bin/out123
+rootfs/usr/bin/fastfetch
+rootfs/usr/bin/pacman
+rootfs/usr/bin/pacman-conf
+rootfs/usr/bin/aplay
+rootfs/usr/bin/arecord
+rootfs/usr/bin/amixer
+rootfs/usr/lib/
+rootfs/var/
+
+# ALSA and makepkg data files (installed from packages)
+rootfs/usr/share/alsa/
+rootfs/usr/share/makepkg/
+
+# MP3 files (copyrighted, not redistributable)
+rootfs/usr/share/yearn/songs/
+
+# System dirs (created at build time)
+rootfs/dev/
+rootfs/proc/
+rootfs/sys/
+rootfs/run/
+rootfs/tmp/
+rootfs/mnt/
+rootfs/opt/
+rootfs/home/
+rootfs/boot/
+rootfs/linuxrc
