@@ -1,0 +1,28 @@
+#!/bin/bash
+
+VERSION="0.1"
+
+get_volume() {
+    amixer get Master 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%'
+}
+
+set_volume() {
+    amixer set Master "$1%" 2>/dev/null >/dev/null
+}
+
+case "${1:-}" in
+    up)
+        vol=$(get_volume)
+        set_volume $(( vol + 5 ))
+        ;;
+    down)
+        vol=$(get_volume)
+        set_volume $(( vol - 5 ))
+        ;;
+    set)
+        set_volume "$2"
+        ;;
+    *)
+        echo "volume: $(get_volume)%"
+        ;;
+esac
