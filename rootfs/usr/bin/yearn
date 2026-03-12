@@ -1,0 +1,14 @@
+#!/bin/bash
+
+YEARN_VERSION="1.0"
+YEARN_CONF="/etc/yearn.conf"
+
+case "$1" in
+    play)
+        mpg123 "$2"
+        ;;
+    *)
+        echo "yearn - music player"
+        echo "usage: yearn play <url>"
+        ;;
+esac
