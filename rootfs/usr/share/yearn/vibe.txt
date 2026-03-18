@@ -1,0 +1,45 @@
+Initializing the vibe...
+Loading frequencies...
+
+---
+
+Every great distro
+Started with a single line of code
+This one started with a heart
+
+===
+
+The kernel hums
+The shell awaits
+Type your dreams into the void
+
+---
+
+gcc -o life main.c
+Segmentation fault? No.
+This time it compiles clean.
+
+===
+
+From the Philippines with love
+Built from scratch, byte by byte
+ayoko na bro pero andito pa rin
+
+---
+
+The cursor blinks
+The music plays
+In this terminal, we are free
+
+===
+
+No GUI needed
+No window manager required
+Just pure terminal aesthetic
+
+---
+
+<3 <3 <3
+YearnerOS forever
+ayoko na bro
+pero tuloy lang
