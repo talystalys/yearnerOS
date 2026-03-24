@@ -1,14 +1,61 @@
 #!/bin/bash
 
-YEARN_VERSION="1.0"
+YEARN_VERSION="2.0"
 YEARN_CONF="/etc/yearn.conf"
+YEARN_USER_CONF="$HOME/.yearnrc"
+LYRICS_DIR="/usr/share/yearn"
+MPG123_PID=""
+
+cleanup() {
+    if [ -n "$MPG123_PID" ] && kill -0 "$MPG123_PID" 2>/dev/null; then
+        kill "$MPG123_PID" 2>/dev/null
+    fi
+    rm -f /tmp/yearn_stream_*.mp3
+    exit 0
+}
+trap cleanup INT TERM
+
+parse_config() {
+    local config_file="$1" song_name="$2" in_section=0
+    SONG_URL="" ; SONG_LYRICS="" ; SONG_DELAY="0.8" ; SONG_ARTIST="" ; SONG_TITLE=""
+    [ ! -f "$config_file" ] && return 1
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [ -z "$line" ] && continue
+        if [[ "$line" =~ ^\[(.+)\]$ ]]; then
+            [ "$in_section" -eq 1 ] && break
+            [ "${BASH_REMATCH[1]}" = "$song_name" ] && in_section=1
+            continue
+        fi
+        if [ "$in_section" -eq 1 ]; then
+            local key="${line%%=*}" val="${line#*=}"
+            case "$key" in
+                url)    SONG_URL="$val" ;;
+                lyrics) SONG_LYRICS="$val" ;;
+                delay)  SONG_DELAY="$val" ;;
+                artist) SONG_ARTIST="$val" ;;
+                title)  SONG_TITLE="$val" ;;
+            esac
+        fi
+    done < "$config_file"
+    [ -n "$SONG_URL" ] && return 0
+    return 1
+}
 
 case "$1" in
     play)
         mpg123 "$2"
         ;;
+    --list)
+        for conf in "$YEARN_USER_CONF" "$YEARN_CONF"; do
+            [ ! -f "$conf" ] && continue
+            while IFS= read -r line; do
+                [[ "$line" =~ ^\[(.+)\]$ ]] && echo "<3 ${BASH_REMATCH[1]}"
+            done < "$conf"
+        done
+        ;;
     *)
-        echo "yearn - music player"
-        echo "usage: yearn play <url>"
+        echo "yearnerOS yearn v2.0"
         ;;
 esac
