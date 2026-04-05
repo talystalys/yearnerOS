@@ -35,4 +35,29 @@ ln -sf /proc/self/fd/0 /dev/stdin 2>/dev/null
 ln -sf /proc/self/fd/1 /dev/stdout 2>/dev/null
 ln -sf /proc/self/fd/2 /dev/stderr 2>/dev/null
 
+printf '\033[2J\033[H'
+
+echo ""
+echo "        ****      ****"
+echo "      ********  ********"
+echo "    **********  **********"
+echo "   ******* yearnerOS ********"
+echo "   ***************************"
+echo "    *************************"
+echo "     ***********************"
+echo "      *********************"
+echo "        *****************"
+echo "          *************"
+echo "            *********"
+echo "              *****"
+echo "               ***"
+echo "                *"
+echo ""
+echo "          ayoko na bro"
+echo ""
+echo "  yearnerOS, apaka ANGAAAAAAAAAAS"
+echo ""
+echo "  kita mo nanaman sa github isa lang command neto"
+echo ""
+
 exec setsid cttyhack /usr/bin/bash --login
