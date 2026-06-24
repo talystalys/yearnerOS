@@ -13,13 +13,13 @@ os na lightweight pero malaki ung impact
         @@@@@@
           @@
 
-   yearnerOS, apaka ANGAAAAAAAAAAS
+   yearnerOS
 ```
-template yung readme btw
+
 
 ## Quick Start
 
-kailangan mo nakapipewire at qemu 64 para iinstall to bawal pulsewire dahil nakalimutan ko ilagay
+pipewire qemu ethernet
 
 ## Commands
 
@@ -49,4 +49,4 @@ bios to grub to kernel
 
 
 ## License
-wala nakawin mo go lang 
+la
