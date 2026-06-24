@@ -1,0 +1,63 @@
+#!/bin/sh
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /tmp
+mount -t tmpfs tmpfs /run
+
+hostname yearneros
+
+export HOME=/root
+export PATH=/usr/bin:/usr/sbin:/bin:/sbin
+export TERM=linux
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib/x86_64-linux-gnu:/lib
+
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+
+if [ -d /sys/class/net/eth0 ]; then
+    ifconfig eth0 up 2>/dev/null
+    udhcpc -i eth0 -s /usr/share/udhcpc/default.script -q -n 2>/dev/null &
+fi
+
+if [ -d /dev/snd ]; then
+    amixer set Master 100% unmute 2>/dev/null
+    amixer set PCM 100% unmute 2>/dev/null
+    amixer set Front 100% unmute 2>/dev/null
+    amixer set Headphone 100% unmute 2>/dev/null
+    amixer set Speaker 100% unmute 2>/dev/null
+fi
+
+ln -sf /proc/self/fd /dev/fd 2>/dev/null
+ln -sf /proc/self/fd/0 /dev/stdin 2>/dev/null
+ln -sf /proc/self/fd/1 /dev/stdout 2>/dev/null
+ln -sf /proc/self/fd/2 /dev/stderr 2>/dev/null
+
+printf '\033[2J\033[H'
+
+echo ""
+echo "        ****      ****"
+echo "      ********  ********"
+echo "    **********  **********"
+echo "   ******* yearnerOS ********"
+echo "   ***************************"
+echo "    *************************"
+echo "     ***********************"
+echo "      *********************"
+echo "        *****************"
+echo "          *************"
+echo "            *********"
+echo "              *****"
+echo "               ***"
+echo "                *"
+echo ""
+echo "          ayoko na bro"
+echo ""
+echo "  yearnerOS, apaka ANGAAAAAAAAAAS"
+echo ""
+echo "  kita mo nanaman sa github isa lang command neto"
+echo ""
+
+exec setsid cttyhack /usr/bin/bash --login

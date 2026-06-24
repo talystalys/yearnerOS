@@ -1,0 +1,9 @@
+export HOME=/root
+export PATH=/usr/bin:/usr/sbin:/bin:/sbin
+export TERM=linux
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib/x86_64-linux-gnu:/lib
+export PS1='\[\e[1;31m\]<3\[\e[0m\] \[\e[1;35m\]\u@yearneros\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
+
+alias ll='ls -la --color=auto'
+alias ls='ls --color=auto'
+alias sysinfo='fastfetch'

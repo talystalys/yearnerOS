@@ -1,0 +1,767 @@
+#!/bin/bash
+
+YEARN_VERSION="3.0"
+YEARN_CONF="/etc/yearn.conf"
+YEARN_USER_CONF="$HOME/.yearnrc"
+LYRICS_DIR="/usr/share/yearn"
+LYRICS_CACHE="/tmp/yearn_lyrics.txt"
+MPG123_PID=""
+SONG_DISPLAY_NAME=""
+
+RED='\033[1;31m'
+PINK='\033[1;35m'
+CYAN='\033[1;36m'
+WHITE='\033[1;37m'
+YELLOW='\033[1;33m'
+GREEN='\033[1;32m'
+DIM='\033[2m'
+RESET='\033[0m'
+BOLD='\033[1m'
+
+cleanup() {
+    if [ -n "$MPG123_PID" ] && kill -0 "$MPG123_PID" 2>/dev/null; then
+        kill "$MPG123_PID" 2>/dev/null
+        wait "$MPG123_PID" 2>/dev/null
+    fi
+    printf '\033[?25h\033[0m'
+    rm -f /tmp/yearn_stream_*.mp3
+    clear
+    echo -e "${DIM}...the yearning fades${RESET}"
+    echo ""
+    exit 0
+}
+trap cleanup INT TERM
+
+get_rows() { local r; r=$(stty size 2>/dev/null | cut -d' ' -f1); echo "${r:-24}"; }
+get_cols() { local c; c=$(stty size 2>/dev/null | cut -d' ' -f2); echo "${c:-80}"; }
+
+parse_config() {
+    local config_file="$1" song_name="$2" in_section=0
+    SONG_URL="" ; SONG_LYRICS="" ; SONG_DELAY="0.8" ; SONG_ARTIST="" ; SONG_TITLE=""
+    [ ! -f "$config_file" ] && return 1
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [ -z "$line" ] && continue
+        if [[ "$line" =~ ^\[(.+)\]$ ]]; then
+            [ "$in_section" -eq 1 ] && break
+            [ "${BASH_REMATCH[1]}" = "$song_name" ] && in_section=1
+            continue
+        fi
+        if [ "$in_section" -eq 1 ]; then
+            local key="${line%%=*}" val="${line#*=}"
+            case "$key" in
+                url)    SONG_URL="$val" ;;
+                lyrics) SONG_LYRICS="$val" ;;
+                delay)  SONG_DELAY="$val" ;;
+                artist) SONG_ARTIST="$val" ;;
+                title)  SONG_TITLE="$val" ;;
+            esac
+        fi
+    done < "$config_file"
+    [ -n "$SONG_URL" ] && return 0
+    return 1
+}
+
+list_songs() {
+    echo -e "${RED}yearn${RESET} v${YEARN_VERSION} - configured songs:"
+    echo ""
+    for conf in "$YEARN_USER_CONF" "$YEARN_CONF"; do
+        [ ! -f "$conf" ] && continue
+        echo -e "${DIM}From: $conf${RESET}"
+        while IFS= read -r line; do
+            [[ "$line" =~ ^\[(.+)\]$ ]] && echo -e "  ${PINK}<3${RESET} ${BASH_REMATCH[1]}"
+        done < "$conf"
+        echo ""
+    done
+}
+
+get_random_song() {
+    local songs=()
+    for conf in "$YEARN_USER_CONF" "$YEARN_CONF"; do
+        [ ! -f "$conf" ] && continue
+        while IFS= read -r line; do
+            [[ "$line" =~ ^\[(.+)\]$ ]] && songs+=("${BASH_REMATCH[1]}")
+        done < "$conf"
+    done
+    [ ${#songs[@]} -eq 0 ] && return 1
+    echo "${songs[$(( RANDOM % ${#songs[@]} ))]}"
+}
+
+add_song() {
+    local name="$1" url="$2" lyrics="$3"
+    local conf="$YEARN_USER_CONF"
+    mkdir -p "$(dirname "$conf")"
+    echo "" >> "$conf"
+    echo "[$name]" >> "$conf"
+    echo "url=$url" >> "$conf"
+    [ -n "$lyrics" ] && echo "lyrics=$lyrics" >> "$conf"
+    echo "delay=0.8" >> "$conf"
+    echo -e "${PINK}Added '${name}' to $conf${RESET}"
+}
+
+urlencode() {
+    local str="$1" encoded="" c
+    for (( i=0; i<${#str}; i++ )); do
+        c="${str:$i:1}"
+        case "$c" in
+            [a-zA-Z0-9.~_-]) encoded+="$c" ;;
+            ' ') encoded+='+' ;;
+            *) encoded+=$(printf '%%%02X' "'$c") ;;
+        esac
+    done
+    echo "$encoded"
+}
+
+search_songs() {
+    local query="$1"
+    local encoded=$(urlencode "$query")
+
+    echo -e "${PINK}Searching for '${query}'...${RESET}"
+    echo ""
+
+    local all_urls=()
+    local all_titles=()
+    local all_artists=()
+    local all_sources=()
+    local count=0
+
+    echo -e "${DIM}Searching Internet Archive...${RESET}"
+    local ia_url="https://archive.org/advancedsearch.php?q=${encoded}+AND+mediatype%3Aaudio&fl[]=identifier&fl[]=title&fl[]=creator&output=json&rows=10"
+    local ia_result
+    ia_result=$(wget -qO- --timeout=10 "$ia_url" 2>/dev/null)
+
+    if [ -n "$ia_result" ]; then
+        local ia_ids=() ia_titles=() ia_creators=()
+        while IFS= read -r line; do
+            ia_ids+=("$line")
+        done < <(echo "$ia_result" | grep -o '"identifier":"[^"]*"' | sed 's/"identifier":"//;s/"//')
+        while IFS= read -r line; do
+            ia_titles+=("$line")
+        done < <(echo "$ia_result" | grep -o '"title":"[^"]*"' | sed 's/"title":"//;s/"//')
+        while IFS= read -r line; do
+            ia_creators+=("$line")
+        done < <(echo "$ia_result" | grep -o '"creator":"[^"]*"' | sed 's/"creator":"//;s/"//')
+
+        for (( i=0; i<${#ia_ids[@]} && count<10; i++ )); do
+            all_urls+=("ia:${ia_ids[$i]}")
+            all_titles+=("${ia_titles[$i]:-Unknown Title}")
+            all_artists+=("${ia_creators[$i]:-Unknown}")
+            all_sources+=("Internet Archive")
+            count=$((count + 1))
+        done
+    fi
+
+    echo -e "${DIM}Searching Free Music Archive...${RESET}"
+    local fma_url="https://archive.org/advancedsearch.php?q=${encoded}+AND+collection%3Afreemusicarchive&fl[]=identifier&fl[]=title&fl[]=creator&output=json&rows=5"
+    local fma_result
+    fma_result=$(wget -qO- --timeout=10 "$fma_url" 2>/dev/null)
+
+    if [ -n "$fma_result" ]; then
+        local fma_ids=() fma_titles=() fma_creators=()
+        while IFS= read -r line; do
+            fma_ids+=("$line")
+        done < <(echo "$fma_result" | grep -o '"identifier":"[^"]*"' | sed 's/"identifier":"//;s/"//')
+        while IFS= read -r line; do
+            fma_titles+=("$line")
+        done < <(echo "$fma_result" | grep -o '"title":"[^"]*"' | sed 's/"title":"//;s/"//')
+        while IFS= read -r line; do
+            fma_creators+=("$line")
+        done < <(echo "$fma_result" | grep -o '"creator":"[^"]*"' | sed 's/"creator":"//;s/"//')
+
+        for (( i=0; i<${#fma_ids[@]} && count<15; i++ )); do
+            local dup=0
+            for existing in "${all_urls[@]}"; do
+                [ "$existing" = "ia:${fma_ids[$i]}" ] && dup=1 && break
+            done
+            [ $dup -eq 1 ] && continue
+            all_urls+=("ia:${fma_ids[$i]}")
+            all_titles+=("${fma_titles[$i]:-Unknown Title}")
+            all_artists+=("${fma_creators[$i]:-Unknown}")
+            all_sources+=("Free Music Archive")
+            count=$((count + 1))
+        done
+    fi
+
+    if [ ${#all_urls[@]} -eq 0 ]; then
+        echo -e "${RED}No results found for '${query}'${RESET}"
+        echo ""
+        echo -e "${DIM}Tips:${RESET}"
+        echo -e "  ${CYAN}yearn search lofi${RESET}         - try simpler keywords"
+        echo -e "  ${CYAN}yearn search jazz piano${RESET}   - try genre + instrument"
+        echo -e "  ${CYAN}yearn <direct-mp3-url>${RESET}    - play any MP3 URL directly"
+        return 1
+    fi
+
+    echo ""
+    echo -e "${BOLD}Results (${#all_urls[@]} found):${RESET}"
+    echo ""
+    for (( i=0; i<${#all_urls[@]}; i++ )); do
+        local src="${all_sources[$i]}"
+        local artist="${all_artists[$i]}"
+        printf "  ${CYAN}%2d${RESET}) ${WHITE}%s${RESET} ${DIM}- %s${RESET} ${DIM}[%s]${RESET}\n" "$((i+1))" "${all_titles[$i]}" "$artist" "$src"
+    done
+    echo ""
+    echo -e "  ${DIM} 0) Enter a direct MP3 URL instead${RESET}"
+    echo ""
+    printf "${PINK}Pick a number (0-%d) or 'q' to quit: ${RESET}" "${#all_urls[@]}"
+
+    local choice
+    read -r choice
+    [ "$choice" = "q" ] || [ "$choice" = "Q" ] && return 0
+
+    if [ "$choice" = "0" ]; then
+        printf "${PINK}Enter MP3 URL: ${RESET}"
+        local direct_url
+        read -r direct_url
+        if [ -z "$direct_url" ]; then
+            echo -e "${RED}No URL entered.${RESET}"
+            return 1
+        fi
+        SONG_DISPLAY_NAME="$direct_url"
+        play_song "$direct_url" "" "0.8"
+        return $?
+    fi
+
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#all_urls[@]}" ]; then
+        echo -e "${RED}Invalid choice.${RESET}"
+        return 1
+    fi
+
+    local idx=$((choice - 1))
+    local picked_url="${all_urls[$idx]}"
+    local picked_title="${all_titles[$idx]}"
+    local picked_artist="${all_artists[$idx]}"
+
+    SONG_DISPLAY_NAME="${picked_title} - ${picked_artist}"
+    SONG_ARTIST="$picked_artist"
+    SONG_TITLE="$picked_title"
+
+    if [[ "$picked_url" == ia:* ]]; then
+        local ia_id="${picked_url#ia:}"
+        echo ""
+        echo -e "${DIM}Finding playable file for: ${picked_title}...${RESET}"
+
+        local files_json
+        files_json=$(wget -qO- --timeout=15 "https://archive.org/metadata/${ia_id}/files" 2>/dev/null)
+
+        local mp3_file=""
+        mp3_file=$(echo "$files_json" | grep -o '"name":"[^"]*\.mp3"' | sed 's/"name":"//;s/"//' | head -1)
+
+        if [ -z "$mp3_file" ]; then
+            mp3_file=$(echo "$files_json" | grep -o '"name":"[^"]*\.ogg"' | sed 's/"name":"//;s/"//' | head -1)
+        fi
+
+        if [ -z "$mp3_file" ]; then
+            echo -e "${RED}No playable audio file found.${RESET}"
+            echo -e "${DIM}Try another result or use a direct URL: yearn <url>${RESET}"
+            return 1
+        fi
+
+        local encoded_file=$(urlencode "$mp3_file")
+        picked_url="https://archive.org/download/${ia_id}/${encoded_file}"
+        echo -e "${GREEN}Found: ${mp3_file}${RESET}"
+    fi
+
+    echo ""
+
+    local lyrics_file=""
+    lyrics_file=$(fetch_lyrics_online "$picked_artist" "$picked_title")
+
+    play_song "$picked_url" "$lyrics_file" "0.8"
+}
+
+fetch_lyrics_online() {
+    local artist="$1" title="$2"
+    [ -z "$artist" ] || [ -z "$title" ] && return 1
+
+    local a_clean=$(echo "$artist" | sed 's/ /%20/g; s/[^a-zA-Z0-9%]//g')
+    local t_clean=$(echo "$title" | sed 's/ /%20/g; s/[^a-zA-Z0-9%]//g')
+
+    local lyrics_raw
+    lyrics_raw=$(wget -qO- --timeout=8 "https://api.lyrics.ovh/v1/${a_clean}/${t_clean}" 2>/dev/null)
+
+    if [ -z "$lyrics_raw" ]; then
+        return 1
+    fi
+
+    if echo "$lyrics_raw" | grep -q '"error"'; then
+        return 1
+    fi
+
+    local lyrics_text
+    lyrics_text=$(echo "$lyrics_raw" | sed 's/.*"lyrics":"\(.*\)".*/\1/' | sed 's/\\n/\n/g; s/\\r//g')
+
+    if [ -z "$lyrics_text" ] || [ ${#lyrics_text} -lt 10 ]; then
+        return 1
+    fi
+
+    echo "$lyrics_text" > "$LYRICS_CACHE"
+    echo "$LYRICS_CACHE"
+}
+
+scattered_lyrics_animation() {
+    local lyrics_file="$1"
+    local song_name="$2"
+    local delay="${3:-0.8}"
+    local rows cols
+    rows=$(get_rows)
+    cols=$(get_cols)
+
+    clear
+    printf '\033[?25l'
+
+    local colors=("$RED" "$PINK" "$CYAN" "$WHITE" "$YELLOW")
+    local word_positions=()
+    local line_count=0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        if ! kill -0 "$MPG123_PID" 2>/dev/null; then break; fi
+
+        [ -z "$line" ] && { sleep 0.3; continue; }
+
+        if [ "$line" = "---" ] || [ "$line" = "===" ]; then
+            sleep 1.5
+            for (( f=0; f<3; f++ )); do
+                printf '\033[2m'
+                sleep 0.2
+            done
+            clear
+            draw_now_playing_bar "$song_name" "$rows" "$cols"
+            continue
+        fi
+
+        local words
+        IFS=' ' read -ra words <<< "$line"
+
+        for word in "${words[@]}"; do
+            if ! kill -0 "$MPG123_PID" 2>/dev/null; then break 2; fi
+
+            local max_row=$((rows - 3))
+            [ "$max_row" -lt 2 ] && max_row=2
+            local max_col=$((cols - ${#word} - 1))
+            [ "$max_col" -lt 2 ] && max_col=2
+
+            local row=$(( RANDOM % max_row + 1 ))
+            local col=$(( RANDOM % max_col + 1 ))
+            local cidx=$(( RANDOM % ${#colors[@]} ))
+            local color="${colors[$cidx]}"
+
+            printf '\033[%d;%dH%b%s%b' "$row" "$col" "$color" "$word" "$RESET"
+            sleep 0.12
+        done
+
+        draw_now_playing_bar "$song_name" "$rows" "$cols"
+        sleep "$delay"
+
+        line_count=$((line_count + 1))
+
+        if (( line_count % 8 == 0 )); then
+            sleep 0.5
+            clear
+            draw_now_playing_bar "$song_name" "$rows" "$cols"
+        fi
+    done < "$lyrics_file"
+
+    printf '\033[?25h'
+}
+
+synced_lyrics_animation() {
+    local lrc_file="$1"
+    local song_name="$2"
+    local start_s="${3:-$(date +%s)}"
+    local rows cols
+    rows=$(get_rows)
+    cols=$(get_cols)
+
+    clear
+    printf '\033[?25l'
+
+    local colors=("$RED" "$PINK" "$CYAN" "$WHITE" "$YELLOW")
+    local line_count=0
+
+    local -a lrc_times=()
+    local -a lrc_texts=()
+
+    while IFS= read -r raw_line; do
+        if [[ "$raw_line" =~ ^\[([0-9]+):([0-9]+)(\.([0-9]+))?\](.*) ]]; then
+            local mm="${BASH_REMATCH[1]}"
+            local ss="${BASH_REMATCH[2]}"
+            local text="${BASH_REMATCH[5]}"
+            local total_s=$(( 10#$mm * 60 + 10#$ss ))
+            lrc_times+=("$total_s")
+            lrc_texts+=("$text")
+        fi
+    done < "$lrc_file"
+
+    local n_lines=${#lrc_times[@]}
+    if [ "$n_lines" -eq 0 ]; then
+        printf '\033[?25h'
+        return 1
+    fi
+
+    draw_now_playing_bar "$song_name" "$rows" "$cols"
+
+    local idx=0
+    while [ $idx -lt $n_lines ]; do
+        if ! kill -0 "$MPG123_PID" 2>/dev/null; then break; fi
+
+        local now_s
+        now_s=$(date +%s)
+        local elapsed=$(( now_s - start_s ))
+
+        local target=${lrc_times[$idx]}
+
+        if [ $elapsed -lt $target ]; then
+            sleep 0.2
+            continue
+        fi
+
+        local text="${lrc_texts[$idx]}"
+        idx=$((idx + 1))
+
+        [ -z "$text" ] && continue
+
+        if [[ "$text" == *"♪"* ]]; then
+            clear
+            local mid_row=$((rows / 2))
+            local inst_col=$(( (cols - ${#text}) / 2 ))
+            [ $inst_col -lt 1 ] && inst_col=1
+            printf '\033[%d;%dH%b%s%b' "$mid_row" "$inst_col" "$DIM" "$text" "$RESET"
+            draw_now_playing_bar "$song_name" "$rows" "$cols"
+            continue
+        fi
+
+        local words
+        IFS=' ' read -ra words <<< "$text"
+
+        local next_target
+        if [ $idx -lt $n_lines ]; then
+            next_target=${lrc_times[$idx]}
+        else
+            next_target=$(( target + 3 ))
+        fi
+        local gap=$(( next_target - target ))
+        local n_words=${#words[@]}
+        local word_delay="0.12"
+        if [ $n_words -gt 0 ] && [ $gap -gt 0 ]; then
+            local total_ms=$(( gap * 600 / n_words ))
+            [ $total_ms -lt 50 ] && total_ms=50
+            [ $total_ms -gt 300 ] && total_ms=300
+            if [ $total_ms -ge 100 ]; then
+                word_delay="0.${total_ms}"
+            else
+                word_delay="0.0${total_ms}"
+            fi
+        fi
+
+        for word in "${words[@]}"; do
+            if ! kill -0 "$MPG123_PID" 2>/dev/null; then break 2; fi
+
+            local max_row=$((rows - 3))
+            [ "$max_row" -lt 2 ] && max_row=2
+            local max_col=$((cols - ${#word} - 1))
+            [ "$max_col" -lt 2 ] && max_col=2
+
+            local row=$(( RANDOM % max_row + 1 ))
+            local col=$(( RANDOM % max_col + 1 ))
+            local cidx=$(( RANDOM % ${#colors[@]} ))
+            local color="${colors[$cidx]}"
+
+            printf '\033[%d;%dH%b%s%b' "$row" "$col" "$color" "$word" "$RESET"
+            sleep "$word_delay"
+        done
+
+        draw_now_playing_bar "$song_name" "$rows" "$cols"
+        line_count=$((line_count + 1))
+
+        if (( line_count % 6 == 0 )); then
+            clear
+            draw_now_playing_bar "$song_name" "$rows" "$cols"
+        fi
+    done
+
+    printf '\033[?25h'
+}
+
+draw_now_playing_bar() {
+    local song_name="$1"
+    local rows="$2"
+    local cols="$3"
+
+    printf '\033[%d;1H' "$((rows - 1))"
+    local bar_text=$(printf "%-${cols}s" " ")
+    printf '\033[44m%s\033[0m' "$bar_text"
+
+    local np_text="<3 Now Playing: ${song_name}"
+    local ctrl_text="[Ctrl+C to stop]"
+    local left_pad=2
+
+    printf '\033[%d;%dH\033[44m%b%s%b\033[0m' "$((rows - 1))" "$left_pad" "$WHITE$BOLD" "$np_text" "$RESET"
+
+    local right_pad=$((cols - ${#ctrl_text} - 1))
+    printf '\033[%d;%dH\033[44m%b%s%b\033[0m' "$((rows - 1))" "$right_pad" "$DIM" "$ctrl_text" "$RESET"
+
+    printf '\033[%d;1H' "$rows"
+    local hearts=""
+    for (( h=0; h<cols; h+=3 )); do
+        hearts+="<3 "
+    done
+    printf '%b%s%b' "$RED$DIM" "${hearts:0:$cols}" "$RESET"
+}
+
+cat_heart_animation() {
+    local song_name="$1"
+    local rows cols
+    rows=$(get_rows)
+    cols=$(get_cols)
+
+    clear
+    printf '\033[?25l'
+
+    local cat_x=0
+    local heart_x=$((cols - 8))
+    local mid_y=$((rows / 2))
+    local frame=0
+    local direction=1
+
+    local cat_a1=' /\_/\ '
+    local cat_a2='( o.o )'
+    local cat_a3=' > ^ < '
+
+    local cat_b1=' /\_/\ '
+    local cat_b2='( -.- )'
+    local cat_b3='  > < '
+
+    while kill -0 "$MPG123_PID" 2>/dev/null; do
+        for (( r=1; r<rows-2; r++ )); do
+            printf '\033[%d;1H\033[K' "$r"
+        done
+
+        local title_text="<3 ${song_name} <3"
+        local title_pad=$(( (cols - ${#title_text}) / 2 ))
+        [ "$title_pad" -lt 0 ] && title_pad=0
+        printf '\033[2;%dH%b%s%b' "$title_pad" "$PINK$BOLD" "$title_text" "$RESET"
+
+        local bar_w=$((cols - 10))
+        local filled=$(( cat_x * bar_w / (cols + 5) ))
+        [ "$filled" -gt "$bar_w" ] && filled=$bar_w
+        printf '\033[4;5H%b[' "$DIM"
+        for ((b=0; b<bar_w; b++)); do
+            if ((b < filled)); then
+                printf '%b%b' "$RED" "="
+            else
+                printf '%b-' "$DIM"
+            fi
+        done
+        printf '%b]%b' "$DIM" "$RESET"
+
+        if (( frame % 2 == 0 )); then
+            printf '\033[%d;%dH%b%s%b' "$((mid_y-1))" "$cat_x" "$WHITE" "$cat_a1" "$RESET"
+            printf '\033[%d;%dH%b%s%b' "$mid_y"       "$cat_x" "$WHITE" "$cat_a2" "$RESET"
+            printf '\033[%d;%dH%b%s%b' "$((mid_y+1))" "$cat_x" "$WHITE" "$cat_a3" "$RESET"
+        else
+            printf '\033[%d;%dH%b%s%b' "$((mid_y-1))" "$cat_x" "$WHITE" "$cat_b1" "$RESET"
+            printf '\033[%d;%dH%b%s%b' "$mid_y"       "$cat_x" "$WHITE" "$cat_b2" "$RESET"
+            printf '\033[%d;%dH%b%s%b' "$((mid_y+1))" "$cat_x" "$WHITE" "$cat_b3" "$RESET"
+        fi
+
+        local heart_y=$((mid_y + (frame % 3) - 1))
+        printf '\033[%d;%dH%b<3%b' "$heart_y" "$heart_x" "$RED$BOLD" "$RESET"
+
+        local fh1_y=$(( 3 + (frame * 3) % (rows - 6) ))
+        local fh1_x=$(( (frame * 7 + 13) % (cols - 2) + 1 ))
+        printf '\033[%d;%dH%b<3%b' "$fh1_y" "$fh1_x" "$PINK$DIM" "$RESET"
+
+        local fh2_y=$(( 5 + (frame * 5 + 7) % (rows - 8) ))
+        local fh2_x=$(( (frame * 11 + 3) % (cols - 2) + 1 ))
+        printf '\033[%d;%dH%b<3%b' "$fh2_y" "$fh2_x" "$RED$DIM" "$RESET"
+
+        cat_x=$((cat_x + 2))
+        heart_x=$((heart_x - 1))
+
+        if (( cat_x > cols + 5 )); then
+            cat_x=0
+            heart_x=$((cols - 8))
+        fi
+        if (( heart_x < -2 )); then
+            heart_x=$((cols - 2))
+        fi
+
+        draw_now_playing_bar "$song_name" "$rows" "$cols"
+
+        frame=$((frame + 1))
+        sleep 0.18
+    done
+
+    printf '\033[?25h'
+    clear
+}
+
+play_song() {
+    local url="$1"
+    local lyrics="$2"
+    local delay="${3:-0.8}"
+    local song_name="${SONG_DISPLAY_NAME:-$url}"
+
+    echo -e "${DIM}Streaming: ${url}${RESET}"
+    echo ""
+
+    local play_file="$url"
+    local mpg123_err="/tmp/yearn_mpg123.err"
+    local tmp_mp3="/tmp/yearn_stream_$$.mp3"
+
+    case "$url" in
+        http://*|https://*)
+            echo -e "${DIM}Downloading...${RESET}"
+            if ! wget -q -O "$tmp_mp3" "$url" 2>/dev/null; then
+                echo -e "${RED}Could not download audio.${RESET}"
+                echo -e "${DIM}Check: ifconfig eth0 (network)${RESET}"
+                rm -f "$tmp_mp3"
+                return 1
+            fi
+            if [ ! -s "$tmp_mp3" ]; then
+                echo -e "${RED}Downloaded file is empty.${RESET}"
+                rm -f "$tmp_mp3"
+                return 1
+            fi
+            play_file="$tmp_mp3"
+            ;;
+    esac
+
+    local music_start_time
+    music_start_time=$(date +%s)
+    mpg123 -q "$play_file" 2>"$mpg123_err" &
+    MPG123_PID=$!
+    sleep 1
+
+    if ! kill -0 "$MPG123_PID" 2>/dev/null; then
+        echo -e "${RED}Could not play audio.${RESET}"
+        if [ -f "$mpg123_err" ] && [ -s "$mpg123_err" ]; then
+            echo -e "${DIM}mpg123 error:${RESET}"
+            head -5 "$mpg123_err"
+        fi
+        echo -e "${DIM}Check: ls /dev/snd/ (audio device)${RESET}"
+        echo -e "${DIM}Check: amixer (volume/mute)${RESET}"
+        rm -f "$tmp_mp3"
+        return 1
+    fi
+
+    local lrc_file=""
+    if [ -n "$lyrics" ]; then
+        if [[ "$lyrics" == *.lrc ]] && [ -f "$lyrics" ]; then
+            lrc_file="$lyrics"
+        else
+            local lrc_try="${lyrics%.txt}.lrc"
+            if [ -f "$lrc_try" ]; then
+                lrc_file="$lrc_try"
+            fi
+        fi
+    fi
+
+    if [ -n "$lrc_file" ]; then
+        synced_lyrics_animation "$lrc_file" "$song_name" "$music_start_time"
+    elif [ -n "$lyrics" ] && [ -f "$lyrics" ]; then
+        scattered_lyrics_animation "$lyrics" "$song_name" "${delay}"
+    else
+        if [ -n "$SONG_ARTIST" ] && [ -n "$SONG_TITLE" ]; then
+            echo -e "${DIM}Looking for lyrics online...${RESET}"
+            local online_lyrics
+            online_lyrics=$(fetch_lyrics_online "$SONG_ARTIST" "$SONG_TITLE")
+            if [ -n "$online_lyrics" ] && [ -f "$online_lyrics" ]; then
+                scattered_lyrics_animation "$online_lyrics" "$song_name" "${delay}"
+                return $?
+            fi
+        fi
+        cat_heart_animation "$song_name"
+    fi
+
+    if kill -0 "$MPG123_PID" 2>/dev/null; then
+        clear
+        draw_now_playing_bar "$song_name" "$(get_rows)" "$(get_cols)"
+        echo ""
+        echo ""
+        echo -e "  ${DIM}Song still playing... press Ctrl+C to stop${RESET}"
+        wait "$MPG123_PID" 2>/dev/null
+    fi
+
+    rm -f "$tmp_mp3"
+}
+
+show_help() {
+    echo -e "${RED}yearn${RESET} v${YEARN_VERSION} - yearnerOS music player"
+    echo ""
+    echo -e "${BOLD}Usage:${RESET}"
+    echo "  yearn now                Pag-Ibig ay Kanibalismo II <3"
+    echo "  yearn                    Play a random configured song"
+    echo "  yearn <name>             Play a named song from config"
+    echo "  yearn <url>              Play any direct MP3/audio URL"
+    echo "  yearn play <url>         Same as above"
+    echo "  yearn search <query>     Search Internet Archive + FMA"
+    echo "  yearn --list             List configured songs"
+    echo "  yearn --add <name> <url> [lyrics]"
+    echo "                           Add a song to config"
+    echo "  yearn --help             Show this help"
+    echo ""
+    echo -e "${BOLD}Config:${RESET} $YEARN_CONF or $YEARN_USER_CONF"
+    echo ""
+    echo -e "${DIM}Press Ctrl+C to stop playback${RESET}"
+    echo -e "${DIM}Use 'pleasehearmeout' to adjust volume${RESET}"
+}
+
+case "${1:-}" in
+    --help|-h)
+        show_help ; exit 0 ;;
+    --list|-l)
+        list_songs ; exit 0 ;;
+    --add|-a)
+        [ -z "$2" ] || [ -z "$3" ] && { echo "Usage: yearn --add <name> <url> [lyrics]"; exit 1; }
+        add_song "$2" "$3" "$4" ; exit 0 ;;
+    --version|-v)
+        echo "yearn v${YEARN_VERSION}" ; exit 0 ;;
+    search|s)
+        shift
+        [ -z "$1" ] && { echo "Usage: yearn search <query>"; exit 1; }
+        search_songs "$*" ; exit $? ;;
+    play|p)
+        shift
+        [ -z "$1" ] && { echo "Usage: yearn play <url>"; exit 1; }
+        SONG_DISPLAY_NAME="$1"
+        play_song "$1" "" "0.8" ; exit $? ;;
+    now)
+        SONG_DISPLAY_NAME="Pag-Ibig ay Kanibalismo II - fitterkarma"
+        SONG_ARTIST="fitterkarma"
+        SONG_TITLE="Pag-Ibig ay Kanibalismo II"
+        play_song "/usr/share/yearn/songs/pagibig.mp3" "/usr/share/yearn/pagibig.txt" "0.8"
+        exit $? ;;
+esac
+
+if [ -n "$1" ] && [[ "$1" == http* ]]; then
+    SONG_DISPLAY_NAME="$1"
+    play_song "$1" "$2" "0.8"
+    exit $?
+fi
+
+SONG_NAME="${1:-}"
+if [ -z "$SONG_NAME" ]; then
+    SONG_NAME=$(get_random_song)
+    if [ -z "$SONG_NAME" ]; then
+        echo -e "${RED}No songs configured.${RESET}"
+        echo -e "Search online: ${CYAN}yearn search <query>${RESET}"
+        echo -e "Or play URL:   ${CYAN}yearn https://example.com/song.mp3${RESET}"
+        exit 1
+    fi
+    echo -e "${DIM}Random pick: ${PINK}${SONG_NAME}${RESET}"
+fi
+
+for conf in "$YEARN_USER_CONF" "$YEARN_CONF"; do
+    if parse_config "$conf" "$SONG_NAME"; then
+        SONG_DISPLAY_NAME="${SONG_TITLE:-$SONG_NAME}${SONG_ARTIST:+ - $SONG_ARTIST}"
+        play_song "$SONG_URL" "$SONG_LYRICS" "$SONG_DELAY"
+        exit $?
+    fi
+done
+
+echo -e "${RED}Song '${SONG_NAME}' not found.${RESET}"
+echo -e "Use ${CYAN}yearn --list${RESET} or ${CYAN}yearn search <query>${RESET}"
+exit 1

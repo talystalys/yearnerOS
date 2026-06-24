@@ -1,0 +1,224 @@
+#!/bin/bash
+
+VERSION="1.0"
+
+RED='\033[1;31m'
+PINK='\033[1;35m'
+CYAN='\033[1;36m'
+WHITE='\033[1;37m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+DIM='\033[2m'
+RESET='\033[0m'
+BOLD='\033[1m'
+BG_DARK='\033[40m'
+
+get_volume() {
+    local vol
+    vol=$(amixer get Master 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%')
+    echo "${vol:-50}"
+}
+
+get_mute_status() {
+    local status
+    status=$(amixer get Master 2>/dev/null | grep -o '\[on\]\|\[off\]' | head -1)
+    [ "$status" = "[off]" ] && echo "MUTED" || echo "ON"
+}
+
+set_volume() {
+    amixer set Master "$1%" 2>/dev/null >/dev/null
+}
+
+toggle_mute() {
+    amixer set Master toggle 2>/dev/null >/dev/null
+}
+
+draw_volume_bar() {
+    local vol="$1"
+    local bar_width=30
+    local filled=$(( vol * bar_width / 100 ))
+    local empty=$(( bar_width - filled ))
+
+    printf "    ${WHITE}[${RESET}"
+    for (( i=0; i<filled; i++ )); do
+        if (( vol > 75 )); then
+            printf "${RED}=${RESET}"
+        elif (( vol > 40 )); then
+            printf "${YELLOW}=${RESET}"
+        else
+            printf "${GREEN}=${RESET}"
+        fi
+    done
+    for (( i=0; i<empty; i++ )); do
+        printf "${DIM}-${RESET}"
+    done
+    printf "${WHITE}]${RESET} ${BOLD}%3d%%${RESET}" "$vol"
+}
+
+draw_ui() {
+    local vol=$(get_volume)
+    local mute=$(get_mute_status)
+    local cols
+    cols=$(stty size 2>/dev/null | cut -d' ' -f2)
+    cols="${cols:-60}"
+
+    clear
+
+    echo ""
+    echo -e "  ${RED}  /\\_/\\${RESET}   ${PINK}${BOLD}pleasehearmeout${RESET} v${VERSION}"
+    echo -e "  ${RED} ( o.o )${RESET}  ${DIM}yearnerOS audio settings${RESET}"
+    echo -e "  ${RED}  > ^ <${RESET}"
+    echo ""
+    echo -e "  ${DIM}$(printf '%.0s─' $(seq 1 44))${RESET}"
+    echo ""
+
+    if [ "$mute" = "MUTED" ]; then
+        echo -e "    ${RED}${BOLD}MUTED${RESET}"
+    else
+        echo -e "    ${GREEN}${BOLD}Volume${RESET}"
+    fi
+    echo ""
+    draw_volume_bar "$vol"
+    echo ""
+    echo ""
+
+    if [ "$mute" = "MUTED" ]; then
+        echo -e "    ${DIM}    |  ${RESET}"
+        echo -e "    ${DIM}    |))${RESET}  ${RED}X${RESET}"
+        echo -e "    ${DIM}    |  ${RESET}"
+    elif (( vol > 75 )); then
+        echo -e "    ${WHITE}    |  ${RESET}${BOLD})${RESET} ${BOLD})${RESET} ${BOLD})${RESET}"
+        echo -e "    ${WHITE}    |))${RESET} ${BOLD})${RESET} ${BOLD})${RESET} ${BOLD})${RESET}"
+        echo -e "    ${WHITE}    |  ${RESET}${BOLD})${RESET} ${BOLD})${RESET} ${BOLD})${RESET}"
+    elif (( vol > 40 )); then
+        echo -e "    ${WHITE}    |  ${RESET}${DIM})${RESET} ${DIM})${RESET}"
+        echo -e "    ${WHITE}    |))${RESET} ${DIM})${RESET} ${DIM})${RESET}"
+        echo -e "    ${WHITE}    |  ${RESET}${DIM})${RESET} ${DIM})${RESET}"
+    elif (( vol > 0 )); then
+        echo -e "    ${WHITE}    |  ${RESET}${DIM})${RESET}"
+        echo -e "    ${WHITE}    |))${RESET} ${DIM})${RESET}"
+        echo -e "    ${WHITE}    |  ${RESET}${DIM})${RESET}"
+    else
+        echo -e "    ${DIM}    |  ${RESET}"
+        echo -e "    ${DIM}    |))${RESET}"
+        echo -e "    ${DIM}    |  ${RESET}"
+    fi
+
+    echo ""
+    echo -e "  ${DIM}$(printf '%.0s─' $(seq 1 44))${RESET}"
+    echo ""
+    echo -e "  ${CYAN}[+]${RESET} / ${CYAN}[Up]${RESET}     Volume up (+5%)"
+    echo -e "  ${CYAN}[-]${RESET} / ${CYAN}[Down]${RESET}   Volume down (-5%)"
+    echo -e "  ${CYAN}[m]${RESET}            Mute / Unmute"
+    echo -e "  ${CYAN}[0-9]${RESET}          Set volume (x10%)"
+    echo -e "  ${CYAN}[f]${RESET}            Full volume (100%)"
+    echo -e "  ${CYAN}[q]${RESET}            Quit"
+    echo ""
+
+    local card_info
+    card_info=$(cat /proc/asound/cards 2>/dev/null | head -2)
+    if [ -n "$card_info" ]; then
+        echo -e "  ${DIM}Audio device:${RESET}"
+        echo -e "  ${DIM}${card_info}${RESET}"
+    else
+        echo -e "  ${DIM}No audio device detected${RESET}"
+        echo -e "  ${DIM}Start QEMU with: -device intel-hda -device hda-duplex${RESET}"
+    fi
+    echo ""
+    echo -e "  ${DIM}<3 press a key${RESET}"
+}
+
+read_key() {
+    local key
+    IFS= read -rsn1 key
+    if [ "$key" = $'\033' ]; then
+        read -rsn2 -t 0.1 key
+        case "$key" in
+            '[A') echo "UP" ;;
+            '[B') echo "DOWN" ;;
+            *)    echo "ESC" ;;
+        esac
+    else
+        echo "$key"
+    fi
+}
+
+case "${1:-}" in
+    --help|-h)
+        echo -e "${PINK}pleasehearmeout${RESET} v${VERSION} - yearnerOS audio settings"
+        echo ""
+        echo "Usage:"
+        echo "  pleasehearmeout              Interactive volume control"
+        echo "  pleasehearmeout up           Volume up 5%"
+        echo "  pleasehearmeout down         Volume down 5%"
+        echo "  pleasehearmeout mute         Toggle mute"
+        echo "  pleasehearmeout set <0-100>  Set volume"
+        echo "  pleasehearmeout status       Show current volume"
+        exit 0
+        ;;
+    up)
+        vol=$(get_volume)
+        vol=$(( vol + 5 ))
+        [ "$vol" -gt 100 ] && vol=100
+        set_volume "$vol"
+        echo -e "${GREEN}Volume: ${vol}%${RESET}"
+        exit 0
+        ;;
+    down)
+        vol=$(get_volume)
+        vol=$(( vol - 5 ))
+        [ "$vol" -lt 0 ] && vol=0
+        set_volume "$vol"
+        echo -e "${YELLOW}Volume: ${vol}%${RESET}"
+        exit 0
+        ;;
+    mute)
+        toggle_mute
+        echo -e "${RED}Toggled mute${RESET}"
+        exit 0
+        ;;
+    set)
+        [ -z "$2" ] && { echo "Usage: pleasehearmeout set <0-100>"; exit 1; }
+        set_volume "$2"
+        echo -e "${GREEN}Volume set to ${2}%${RESET}"
+        exit 0
+        ;;
+    status)
+        echo -e "Volume: $(get_volume)% ($(get_mute_status))"
+        exit 0
+        ;;
+esac
+
+while true; do
+    draw_ui
+    key=$(read_key)
+
+    case "$key" in
+        +|UP)
+            vol=$(get_volume)
+            vol=$(( vol + 5 ))
+            [ "$vol" -gt 100 ] && vol=100
+            set_volume "$vol"
+            ;;
+        -|DOWN)
+            vol=$(get_volume)
+            vol=$(( vol - 5 ))
+            [ "$vol" -lt 0 ] && vol=0
+            set_volume "$vol"
+            ;;
+        m|M)
+            toggle_mute
+            ;;
+        f|F)
+            set_volume 100
+            ;;
+        [0-9])
+            set_volume $(( key * 10 ))
+            ;;
+        q|Q|ESC)
+            clear
+            echo -e "${DIM}audio settings saved <3${RESET}"
+            exit 0
+            ;;
+    esac
+done
