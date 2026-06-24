@@ -38,14 +38,15 @@ pipewire qemu ethernet
 bios to grub to kernel 
 
 ### Components Built From Source
-- Linux kernel 6.6.90 (custom minimal config)
-- Bash 5.2.0 (static build)
-- BusyBox (static, 200+ applets)
-- mpg123 (MP3 decoder/player)
-- ALSA lib + utils (audio framework)
-- Pacman 6.0.2 (package manager)
-- Fastfetch (system info tool)
-- GRUB (bootloader)
+- Linux kernel 6.6.90 
+- Bash 5.2.0 
+- BusyBox 
+- mpg123 
+- ALSA lib + utils 
+- Pacman 6.0.2 
+- Fastfetch 
+- GRUB
+- yearn
 
 
 ## License
