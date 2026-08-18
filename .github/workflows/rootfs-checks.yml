@@ -1,0 +1,13 @@
+name: rootfs checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate rootfs structure and shell syntax
+        run: bash scripts/check-rootfs.sh
