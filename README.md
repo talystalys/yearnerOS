@@ -71,7 +71,7 @@ The checked-in scripts expect several utilities to exist in the assembled rootfs
 Run the repository-level structural checks with:
 
 ```bash
-./scripts/check-rootfs.sh
+bash scripts/check-rootfs.sh
 ```
 
 The script checks executable entrypoints, shell syntax, required configuration files, stale naming mistakes and basic rootfs invariants. It does **not** replace a full boot test in QEMU.
